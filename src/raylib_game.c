@@ -18,6 +18,7 @@
 #define SLIGHTLY_RED_GRAY (Color){0x75, 0x45, 0x45}
 
 
+#define _DEBUG
 #define MAX_UNITS 8000
 #define DBG(mess) do {fprintf(stderr, mess); fflush(stderr);} while (0)
 // :type
@@ -422,6 +423,15 @@ void update_draw_frame(void) {
                         input_elem.x, input_elem.y), \
             X +150, Y, 16, BLUE)
 
+
+#define dbg_bool(input_elem, X, Y) \
+  draw_text_default( #input_elem ": " \
+            ,X, Y, 16, BLUE); \
+  draw_text_default( text_format("%d", \
+                        input_elem), \
+            X +150, Y, 16, BLUE)
+
+
   dbg_vec(input.pointer.position, 720/2, 10);
   //draw_text_default( text_format("pointer %f %f", input.pointer.position.x, input.pointer.position.y), 720/2,10,16, BLUE );
   dbg_state(input.pointer, 720/2, 30);
@@ -429,6 +439,8 @@ void update_draw_frame(void) {
   //draw_text_default( text_format("opacity %f", error_banner.opacity), 720/2,70,16, BLUE );
   dbg_vec(input.move_vec, 720/2, 70);
   dbg_vec(input.shoot_vec, 720/2, 90);
+  dbg_bool(input.is_mouse_enabled, 720/2, 110);
+  dbg_bool(input.is_touch_enabled, 720/2, 130);
 
 
 #endif
@@ -609,7 +621,7 @@ void player_stat_draw(PlayerStat self) {}
 // :impl
 static void check_control_methods() {
 
-  if ( is_mouse_button_down(MOUSE_BUTTON_LEFT) ) {
+  if ( is_mouse_button_down(MOUSE_BUTTON_LEFT) && !input.is_touch_enabled ) {
     // detected mouse
     if (input.is_mouse_enabled == false) {
       report_error("Mouse enabled");
@@ -898,10 +910,10 @@ static void input_update(Input* input) {
       }
     }
 
-    input->move_vec    = input_fix_vec(input->move_vec, input->deadzone, 1.0f);
-    input->shoot_vec   = input_fix_vec(input->shoot_vec, input->deadzone, 1.0f);
   }
 
+  input->move_vec    = input_fix_vec(input->move_vec, input->deadzone, 1.0f);
+  input->shoot_vec   = input_fix_vec(input->shoot_vec, input->deadzone, 1.0f);
   // TODO: add touch buttons
 }
 
