@@ -622,6 +622,7 @@ static void check_control_methods() {
     if (input.is_touch_enabled == false) {
       report_error("Touch enabled");
     }
+    input.is_mouse_enabled = false;
     input.is_touch_enabled = true;
   }
 
@@ -772,63 +773,75 @@ static void input_update(Input* input) {
 
   input->shoot_vec   = vector2_zero();
 
-  input->pointer.position = get_mouse_position();
-  input->pointer.is_pressed = is_mouse_button_pressed(MOUSE_BUTTON_LEFT);
-  input->pointer.is_down= is_mouse_button_down(MOUSE_BUTTON_LEFT);
-  input->pointer.is_released= is_mouse_button_released(MOUSE_BUTTON_LEFT);
+  if (input->is_mouse_enabled) {
+    input->pointer.position = get_mouse_position();
+    input->pointer.is_pressed = is_mouse_button_pressed(MOUSE_BUTTON_LEFT);
+    input->pointer.is_down= is_mouse_button_down(MOUSE_BUTTON_LEFT);
+    input->pointer.is_released= is_mouse_button_released(MOUSE_BUTTON_LEFT);
+  }
 
   input->action.is_pressed  = is_key_pressed (input->keyboard.action_key);
   input->action.is_down     = is_key_down    (input->keyboard.action_key);
   input->action.is_released = is_key_released(input->keyboard.action_key);
 
-  if (input->is_touch_enabled && current_screen == SCREEN_GAMEPLAY && false /*for now*/) {
-
-
-    int count = get_touch_point_count();
-    bool captured_left = true;
-    bool captured_right = true;
-    for (int i = 0; i < count; ++i) {
-      Vector2 pos = get_touch_position(i);
-      if (input->left_stick.captured_touch != -1) {
-        if (input->left_stick.captured_touch == get_touch_point_id(i)) {
-          input->move_vec = vector2_scale(vector2_subtract(pos, input->left_stick.position) , 1/input->left_stick.radius);
-          captured_left = true;
+  if (input->is_touch_enabled) {
+    if (current_screen == SCREEN_GAMEPLAY) {
+      bool captured_left = true;
+      bool captured_right = true;
+      int count = get_touch_point_count();
+      for (int i = 0; i < count; ++i) {
+        Vector2 pos = get_touch_position(i);
+        if (input->left_stick.captured_touch != -1) {
+          if (input->left_stick.captured_touch == get_touch_point_id(i)) {
+            input->move_vec = vector2_scale(vector2_subtract(pos, input->left_stick.position) , 1/input->left_stick.radius);
+            captured_left = true;
+          } else {
+            captured_left = false;
+          }
         } else {
-          captured_left = false;
+          if (vector2_distance(input->left_stick.position, pos) < input->left_stick.radius) {
+            // need to capture
+            input->move_vec = vector2_scale(vector2_subtract(pos, input->left_stick.position) , 1/input->left_stick.radius);
+            captured_left = true;
+            continue;
+          }
         }
-      } else {
-        if (vector2_distance(input->left_stick.position, pos) < input->left_stick.radius) {
-          // need to capture
-          input->move_vec = vector2_scale(vector2_subtract(pos, input->left_stick.position) , 1/input->left_stick.radius);
-          captured_left = true;
-          continue;
+
+
+        if (input->right_stick.captured_touch != -1) {
+          if (input->right_stick.captured_touch == get_touch_point_id(i)) {
+            input->shoot_vec = vector2_scale(vector2_subtract(pos, input->right_stick.position) , 1/input->right_stick.radius);
+            captured_right = true;
+          } else {
+            captured_right = false;
+          }
+        } else {
+          if (vector2_distance(input->right_stick.position, pos) < input->right_stick.radius) {
+            // need to capture
+            input->shoot_vec = vector2_scale(vector2_subtract(pos, input->right_stick.position) , 1/input->right_stick.radius);
+            captured_right = true;
+            continue;
+          }
         }
+
       }
 
 
-      if (input->right_stick.captured_touch != -1) {
-        if (input->right_stick.captured_touch == get_touch_point_id(i)) {
-          input->shoot_vec = vector2_scale(vector2_subtract(pos, input->right_stick.position) , 1/input->right_stick.radius);
-          captured_right = true;
-        } else {
-          captured_right = false;
-        }
-      } else {
-        if (vector2_distance(input->right_stick.position, pos) < input->right_stick.radius) {
-          // need to capture
-          input->shoot_vec = vector2_scale(vector2_subtract(pos, input->right_stick.position) , 1/input->right_stick.radius);
-          captured_right = true;
-          continue;
-        }
+      if (!captured_left) {
+        input->left_stick.captured_touch = -1;
       }
+      if (!captured_right) {
+        input->right_stick.captured_touch = -1;
+      }
+
+    } else {
+      // raylib treats singletouch like a mouse
+      input->pointer.position = get_mouse_position();
+      input->pointer.is_pressed = is_mouse_button_pressed(MOUSE_BUTTON_LEFT);
+      input->pointer.is_down= is_mouse_button_down(MOUSE_BUTTON_LEFT);
+      input->pointer.is_released= is_mouse_button_released(MOUSE_BUTTON_LEFT);
     }
 
-    if (!captured_left) {
-      input->left_stick.captured_touch = -1;
-    }
-    if (!captured_right) {
-      input->right_stick.captured_touch = -1;
-    }
 
   } else {
 
