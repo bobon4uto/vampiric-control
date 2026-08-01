@@ -340,7 +340,7 @@ int main(void) {
 void update_draw_frame(void) {
   // :update
   frame_counter++;
-#ifdef _DEBUG
+//#ifdef _DEBUG
 
   // :debug
   if (is_key_down(KEY_M)) {
@@ -361,7 +361,7 @@ void update_draw_frame(void) {
   }
 
 
-#endif
+//#endif
   input_update(&input);
 
 
@@ -395,7 +395,7 @@ void update_draw_frame(void) {
   draw_boxed_text_centered( (Rectangle){100,100,100,100}, "AHAHA", 0.0f, BLACK, RED);
 
   // :dbg
-#ifdef _DEBUG
+//#ifdef _DEBUG
   draw_text( text_format("%f", controlled_float), 10,10,10, BLUE );
   char* screen_name = "SCREEN_UNKNOWN";
   switch (current_screen) {
@@ -443,7 +443,7 @@ void update_draw_frame(void) {
   dbg_bool(input.is_touch_enabled, 720/2, 130);
 
 
-#endif
+//#endif
 
   end_drawing();
 }
