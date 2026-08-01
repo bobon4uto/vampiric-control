@@ -480,7 +480,7 @@ static UITitle title_init() {
   title.start     = ui_button_new(20,540 + 150 * 0, 680,130, "start");
   title.credits   = ui_button_new(20,540 + 150 * 1, 680,130, "credits");
   title.exit_game = ui_button_new(20,540 + 150 * 2, 680,130, "exit");
-  title.selected = 0;
+  title.selected = -1;
   return title;
 }
 static void update_title() {
@@ -496,7 +496,7 @@ static void update_title() {
       ui.title.selected = (ui.title.selected + 1)%3;
     }
     if (input.move_vec.y < -0.1f) {
-      if (ui.title.selected==0) {
+      if (ui.title.selected<=0) {
         ui.title.selected = 3;
       }
       ui.title.selected = ui.title.selected - 1;
@@ -608,13 +608,6 @@ void player_stat_draw(PlayerStat self) {}
 
 // :impl
 static void check_control_methods() {
-  if ( get_touch_point_count() > 0 ) {
-    // detected touch
-    if (input.is_touch_enabled == false) {
-      report_error("Touch enabled");
-    }
-    input.is_touch_enabled = true;
-  }
 
   if ( is_mouse_button_down(MOUSE_BUTTON_LEFT) ) {
     // detected mouse
@@ -623,6 +616,15 @@ static void check_control_methods() {
     }
     input.is_mouse_enabled = true;
   }
+
+  if ( get_touch_point_count() > 0 ) {
+    // detected touch
+    if (input.is_touch_enabled == false) {
+      report_error("Touch enabled");
+    }
+    input.is_touch_enabled = true;
+  }
+
 
     #define MAX_GAMEPADS                   4
     #define MAX_GAMEPAD_BUTTONS           32
