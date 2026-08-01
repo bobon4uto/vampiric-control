@@ -1,4 +1,5 @@
 #include "raylib.h"
+#include "raymath.h"
 #include "raymath_snake_case.h"
 #include "snake_case_api.h"
 
@@ -16,12 +17,15 @@
 #define DEEP_RED          (Color){0xAA,0x00,0x00,0xFF}
 #define SLIGHTLY_RED_GRAY (Color){0x75, 0x45, 0x45}
 
+
+#define MAX_UNITS 8000
 #define DBG(mess) do {fprintf(stderr, mess); fflush(stderr);} while (0)
 // :type
 typedef enum {
   SCREEN_DISCLAIMER,
   SCREEN_TITLE,
   SCREEN_CREDITS,
+  SCREEN_GAMEPLAY,
   SCREEN_COUNT,
 } GameScreen;
 
@@ -47,9 +51,48 @@ typedef struct sButton {
   bool is_pressed, is_released, is_down;
 } Button;
 
+
+
+typedef struct sVirtualStick {
+  Vector2 position;
+  float radius;
+  int captured_touch;
+} VirtualStick;
+
+typedef struct sGamepadSetting {
+  int id;
+  int move_axis_x;
+  int move_axis_y;
+  int shoot_axis_x;
+  int shoot_axis_y;
+  int action_btn;
+} GamepadSetting;
+
+
+typedef struct sKeyboardSetting {
+  int left_key;
+  int right_key;
+  int up_key;
+  int down_key;
+  int shoot_left_key;
+  int shoot_right_key;
+  int shoot_up_key;
+  int shoot_down_key;
+  int action_key;
+} KeyboardSetting;
+
+
 typedef struct sInput {
   Pointer pointer;
   Button action;
+  Vector2 move_vec;
+  Vector2 shoot_vec;
+  float deadzone;
+  bool is_touch_enabled, is_mouse_enabled, is_gamepad_enabled;
+  VirtualStick left_stick;
+  VirtualStick right_stick;
+  GamepadSetting  gamepad;
+  KeyboardSetting keyboard;
 } Input;
 
 typedef struct sMusicPlayer {
@@ -66,6 +109,7 @@ typedef struct sUIButton {
   Vector2 text_offset;
   const char* text;
   bool is_hovered, is_pressed, is_down, is_released;
+  bool was_in_range, was_pressed;
 } UIButton;
 
 
@@ -73,6 +117,8 @@ typedef struct sUITitle {
   UIButton start;
   UIButton credits;
   UIButton exit_game;
+  int selected;
+  bool lock_select;
 } UITitle;
 
 
@@ -89,10 +135,65 @@ typedef struct sErrorBanner {
   float opacity;
 } ErrorBanner;
 
+
+typedef enum {
+  UNIT_CHAR,
+  UNIT_PROJECTILE,
+  UNIT_ITEM,
+} UnitKind;
+
+
+typedef enum {
+  UNIT_STRATEGY_RUSH,
+  UNIT_STRATEGY_STAY_AWAY,
+} UnitStrategy;
+
+
+
+typedef enum {
+  UNIT_WEAPON_SHOTGUN,
+  UNIT_WEAPON_RIFLE,
+  UNIT_WEAPON_PUNCH,
+} UnitWeapon;
+
+typedef struct sUnit {
+  UnitKind kind;
+  UnitStrategy strategy;
+  UnitWeapon weapon;
+  Vector2 position;
+  float damage;
+  float damage_speed;
+    float damage_reload;
+  float knockback;
+  float health;
+  float speed;
+} Unit;
+
+
+typedef struct sUnitArray {
+  int count;
+  Unit items[MAX_UNITS];
+} UnitArray;
+
+typedef struct sPlayerStat {
+  float score; // why not?
+} PlayerStat;
+
+typedef struct sGameplay {
+  UnitArray units;
+  Camera2D camera;
+  PlayerStat player_stats;
+} Gameplay;
+
+
+
 // :glob
 static const int screen_x_ = 720;
 static const int screen_y_ = 1080;
 static bool should_exit = false;
+
+
+static Gameplay gameplay = {0};
 
 static RenderTexture2D target = {0};
 static int frame_counter = 0;
@@ -112,6 +213,7 @@ static ErrorBanner error_banner = {0};
 
 
 // :func
+static void check_control_methods();
 static Vector2 measure_text_default(const char* text, float scale);
 static void draw_boxed_text_centered(Rectangle rec, const char* text, float roundness, Color rec_color, Color text_color );
 static void report_error(const char* mess);
@@ -137,6 +239,10 @@ static TalkBox talk_box_vlad(const char* text);
 // :fInput
 static Input input_init();
 static void input_update(Input* input);
+static void input_draw(Input input);
+static Vector2 input_fix_vec(Vector2 unfixed, float deadzone, float maximum);
+// :fVirtualStick
+void virtual_stick_draw(VirtualStick self, Vector2 control_vec);
 // :fMusicPlayer
 static MusicPlayer music_player_init();
 static void music_player_update(MusicPlayer* music_player);
@@ -144,6 +250,16 @@ static void music_player_fade_to(MusicPlayer* self, EnumMusic id);
 
 // :fUI
 static UI ui_init();
+
+// :fUnit
+void unit_update(Unit* self);
+void unit_draw(Unit self);
+void unit_char_draw_controlled_overlay( Unit self );
+
+
+
+// :fPlayerStat
+void player_stat_draw(PlayerStat self);
 
 // :fTitle
 static UITitle title_init();
@@ -159,6 +275,14 @@ ErrorBanner error_banner_init();
 void error_banner_update(ErrorBanner* self);
 void error_banner_draw(ErrorBanner self);
 
+
+// :fGameplay
+static Gameplay gameplay_init();
+static void update_gameplay();
+static void draw_gameplay();
+static void gameplay_draw_floor();
+Unit* gameplay_get_controlled_unit_ref(Gameplay* gameplay);
+
 // :main
 int main(void) {
 #if !defined(_DEBUG)
@@ -172,6 +296,8 @@ int main(void) {
 
   music_player = music_player_init();
   error_banner = error_banner_init();
+
+  gameplay = gameplay_init();
 
   vlad_talk_box = talk_box_new("Vlad says: ...", 50,300, 32.0f, 0.3f, BLACK );
   current_talk_box = talk_box_vlad("well well well what do we have there.");
@@ -242,6 +368,7 @@ void update_draw_frame(void) {
     case SCREEN_DISCLAIMER: update_diclaimer(); break;
     case SCREEN_TITLE:      update_title();     break;
     case SCREEN_CREDITS:    update_credits();   break;
+    case SCREEN_GAMEPLAY: update_gameplay(); break;
     default: break;
   }
 
@@ -258,6 +385,7 @@ void update_draw_frame(void) {
       case SCREEN_DISCLAIMER: draw_diclaimer(); break;
       case SCREEN_TITLE:      draw_title();     break;
       case SCREEN_CREDITS:    draw_credits();   break;
+      case SCREEN_GAMEPLAY:    draw_gameplay();   break;
       default: break;
     }
   }
@@ -273,6 +401,7 @@ void update_draw_frame(void) {
     case SCREEN_DISCLAIMER: screen_name = "SCREEN_DISCLAIMER"; break;
     case SCREEN_TITLE:      screen_name = "SCREEN_TITLE"; break;
     case SCREEN_CREDITS:    screen_name = "SCREEN_CREDITS"; break;
+    case SCREEN_GAMEPLAY: screen_name = "SCREEN_GAMEPLAY"; break;
     default: break;
   }
   draw_text( text_format("%s", screen_name), 10,30,10, BLUE );
@@ -283,12 +412,23 @@ void update_draw_frame(void) {
   draw_text_default( text_format("p%d r%d d%d", \
                         input_elem.is_pressed, input_elem.is_released, \
                         input_elem.is_down), \
-            X +150, Y, 16, BLUE);
+            X +150, Y, 16, BLUE)
 
-  draw_text_default( text_format("pointer %f %f", input.pointer.position.x, input.pointer.position.y), 720/2,10,16, BLUE );
+
+#define dbg_vec(input_elem, X, Y) \
+  draw_text_default( #input_elem ": " \
+            ,X, Y, 16, BLUE); \
+  draw_text_default( text_format("x%f y%f", \
+                        input_elem.x, input_elem.y), \
+            X +150, Y, 16, BLUE)
+
+  dbg_vec(input.pointer.position, 720/2, 10);
+  //draw_text_default( text_format("pointer %f %f", input.pointer.position.x, input.pointer.position.y), 720/2,10,16, BLUE );
   dbg_state(input.pointer, 720/2, 30);
   dbg_state(input.action, 720/2, 50);
-  draw_text_default( text_format("opacity %f", error_banner.opacity), 720/2,80,16, BLUE );
+  //draw_text_default( text_format("opacity %f", error_banner.opacity), 720/2,70,16, BLUE );
+  dbg_vec(input.move_vec, 720/2, 70);
+  dbg_vec(input.shoot_vec, 720/2, 90);
 
 
 #endif
@@ -299,6 +439,7 @@ void update_draw_frame(void) {
 
 // :screen
 void update_diclaimer() {
+  check_control_methods();
   if (input.pointer.is_pressed || input.action.is_pressed) {
     current_screen = SCREEN_TITLE;
   }
@@ -319,6 +460,11 @@ void draw_diclaimer() {
       "\n"
       "press space or click anywhere\n"
       "if you read the disclaimer.\n"
+      "The game supports:\n"
+      "keyboard (mouse or HJKL)\n"
+      "touch\n"
+      "gamepad (2 joys and a button)\n"
+      "X or A are space\n"
     ;
 
   clear_background( (Color){45,45,45, 255} );
@@ -334,12 +480,56 @@ static UITitle title_init() {
   title.start     = ui_button_new(20,540 + 150 * 0, 680,130, "start");
   title.credits   = ui_button_new(20,540 + 150 * 1, 680,130, "credits");
   title.exit_game = ui_button_new(20,540 + 150 * 2, 680,130, "exit");
+  title.selected = 0;
   return title;
 }
 static void update_title() {
+  check_control_methods();
+
   button_update(&ui.title.start);
   button_update(&ui.title.credits);
   button_update(&ui.title.exit_game);
+
+
+  if (!ui.title.lock_select) {
+    if (input.move_vec.y > 0.1f) {
+      ui.title.selected = (ui.title.selected + 1)%3;
+    }
+    if (input.move_vec.y < -0.1f) {
+      if (ui.title.selected==0) {
+        ui.title.selected = 3;
+      }
+      ui.title.selected = ui.title.selected - 1;
+    }
+    ui.title.lock_select = true;
+  }
+  if (vector2_equals(input.move_vec, vector2_zero() )) {
+    ui.title.lock_select = false;
+  }
+
+
+  if (ui.title.selected == 0) {
+    ui.title.start.is_hovered = true;
+    ui.title.start.is_down = input.action.is_down;
+    ui.title.start.is_pressed = input.action.is_pressed;
+    ui.title.start.is_released = input.action.is_released;
+  } else if (ui.title.selected == 1) {
+    ui.title.credits.is_hovered = true;
+    ui.title.credits.is_down = input.action.is_down;
+    ui.title.credits.is_pressed = input.action.is_pressed;
+    ui.title.credits.is_released = input.action.is_released;
+  } else if (ui.title.selected == 2) {
+    ui.title.exit_game.is_hovered = true;
+    ui.title.exit_game.is_down = input.action.is_down;
+    ui.title.exit_game.is_pressed = input.action.is_pressed;
+    ui.title.exit_game.is_released = input.action.is_released;
+  }
+
+
+
+  if (ui.title.start.is_pressed) {
+    current_screen = SCREEN_GAMEPLAY;
+  }
 
   if (ui.title.exit_game.is_released) {
 #if defined(PLATFORM_WEB)
@@ -348,6 +538,9 @@ static void update_title() {
     should_exit = true;
 #endif
   }
+
+
+
 
   if (ui.title.credits.is_pressed) {
     report_error("Not impolemented");
@@ -368,11 +561,83 @@ static void update_credits() {
 static void draw_credits() {
 }
 
+// :iGameplay
+static Gameplay gameplay_init() {
+  Gameplay gameplay = {0};
+  Camera2D camera = {
+    .offset = (Vector2){screen_x_/2, screen_y_/2},
+    .target = (Vector2){0.0f,0.0f},
+    .rotation = 0.0f,
+    .zoom = 1.0f,
+  };
+  gameplay.camera = camera;
+  return gameplay;
+}
+static void update_gameplay() {
 
+}
+static void draw_gameplay() {
+  begin_mode2_d(gameplay.camera);
+  gameplay_draw_floor();
+
+  for ( int i = 0; i < gameplay.units.count; ++i ) {
+    unit_draw(gameplay.units.items[i]);
+  }
+
+  Unit* controlled = gameplay_get_controlled_unit_ref(&gameplay);
+  if (controlled!=NULL) {
+    unit_char_draw_controlled_overlay( *controlled );
+  }
+
+    end_mode2_d();
+  player_stat_draw(gameplay.player_stats);
+
+  input_draw(input);
+}
+static void gameplay_draw_floor() {
+}
+Unit* gameplay_get_controlled_unit_ref(Gameplay* gameplay) {
+  return NULL;
+}
+
+
+// :iPlayerStat
+void player_stat_draw(PlayerStat self) {}
 
 
 
 // :impl
+static void check_control_methods() {
+  if ( get_touch_point_count() > 0 ) {
+    // detected touch
+    if (input.is_touch_enabled == false) {
+      report_error("Touch enabled");
+    }
+    input.is_touch_enabled = true;
+  }
+
+  if ( is_mouse_button_down(MOUSE_BUTTON_LEFT) ) {
+    // detected mouse
+    if (input.is_mouse_enabled == false) {
+      report_error("Mouse enabled");
+    }
+    input.is_mouse_enabled = true;
+  }
+
+    #define MAX_GAMEPADS                   4
+    #define MAX_GAMEPAD_BUTTONS           32
+  for (int igamepad =0; igamepad < MAX_GAMEPADS;++igamepad) {
+   for (int i =0; i < MAX_GAMEPAD_BUTTONS;++i) {
+     if ( is_gamepad_button_down(igamepad, i) ) {
+       input.gamepad.id = igamepad;
+       if (input.is_gamepad_enabled == false) {
+         report_error("Gamepad enabled");
+       }
+       input.is_gamepad_enabled = true;
+     }
+   }
+  }
+}
 void draw_boxed_text_centered(Rectangle rec, const char* text, float roundness, Color rec_color, Color text_color ) {
   Vector2 text_dim = measure_text_default(text, 32.0f);
   Vector2 text_offset = (Vector2){(rec.width - text_dim.x)/2.0f, (rec.height - text_dim.y)/2.0f};
@@ -468,19 +733,189 @@ static void talk_box_draw(TalkBox self) {
 // :iInput
 static Input input_init() {
   Input self = {0};
+  self.is_touch_enabled = false;
+  self.is_mouse_enabled = false;
+  self.is_gamepad_enabled = false;
+  self.deadzone= 0.2f;
+
+  float r = 180.0f;
+  self.left_stick.position = (Vector2){0.0f + r, screen_y_ - r - 40.0f};
+  self.left_stick.radius = r-20.0f;
+  self.right_stick.position = (Vector2){screen_x_ - r, screen_y_ - r - 40.0f};
+  self.right_stick.radius = r-20.0f;
+
+  self.keyboard.left_key = KEY_A;
+  self.keyboard.right_key = KEY_D;
+  self.keyboard.up_key = KEY_W;
+  self.keyboard.down_key = KEY_S;
+
+  self.keyboard.shoot_left_key  = KEY_H;
+  self.keyboard.shoot_right_key = KEY_L;
+  self.keyboard.shoot_up_key    = KEY_K;
+  self.keyboard.shoot_down_key  = KEY_J;
+
+  self.keyboard.action_key = KEY_SPACE;
+
+  self.gamepad.id = -1;
+
+  self.gamepad.move_axis_x = GAMEPAD_AXIS_LEFT_X;
+  self.gamepad.move_axis_y = GAMEPAD_AXIS_LEFT_Y;
+  self.gamepad.shoot_axis_x = GAMEPAD_AXIS_RIGHT_X;
+  self.gamepad.shoot_axis_y = GAMEPAD_AXIS_RIGHT_Y;
+  self.gamepad.action_btn = GAMEPAD_BUTTON_RIGHT_FACE_DOWN;
+
   return self;
 }
 static void input_update(Input* input) {
+
+  input->shoot_vec   = vector2_zero();
+
   input->pointer.position = get_mouse_position();
   input->pointer.is_pressed = is_mouse_button_pressed(MOUSE_BUTTON_LEFT);
   input->pointer.is_down= is_mouse_button_down(MOUSE_BUTTON_LEFT);
   input->pointer.is_released= is_mouse_button_released(MOUSE_BUTTON_LEFT);
 
-  input->action.is_pressed  = is_key_pressed(KEY_SPACE);
-  input->action.is_down     = is_key_down(KEY_SPACE);
-  input->action.is_released = is_key_released(KEY_SPACE);
+  input->action.is_pressed  = is_key_pressed (input->keyboard.action_key);
+  input->action.is_down     = is_key_down    (input->keyboard.action_key);
+  input->action.is_released = is_key_released(input->keyboard.action_key);
+
+  if (input->is_touch_enabled && current_screen == SCREEN_GAMEPLAY && false /*for now*/) {
+
+
+    int count = get_touch_point_count();
+    bool captured_left = true;
+    bool captured_right = true;
+    for (int i = 0; i < count; ++i) {
+      Vector2 pos = get_touch_position(i);
+      if (input->left_stick.captured_touch != -1) {
+        if (input->left_stick.captured_touch == get_touch_point_id(i)) {
+          input->move_vec = vector2_scale(vector2_subtract(pos, input->left_stick.position) , 1/input->left_stick.radius);
+          captured_left = true;
+        } else {
+          captured_left = false;
+        }
+      } else {
+        if (vector2_distance(input->left_stick.position, pos) < input->left_stick.radius) {
+          // need to capture
+          input->move_vec = vector2_scale(vector2_subtract(pos, input->left_stick.position) , 1/input->left_stick.radius);
+          captured_left = true;
+          continue;
+        }
+      }
+
+
+      if (input->right_stick.captured_touch != -1) {
+        if (input->right_stick.captured_touch == get_touch_point_id(i)) {
+          input->shoot_vec = vector2_scale(vector2_subtract(pos, input->right_stick.position) , 1/input->right_stick.radius);
+          captured_right = true;
+        } else {
+          captured_right = false;
+        }
+      } else {
+        if (vector2_distance(input->right_stick.position, pos) < input->right_stick.radius) {
+          // need to capture
+          input->shoot_vec = vector2_scale(vector2_subtract(pos, input->right_stick.position) , 1/input->right_stick.radius);
+          captured_right = true;
+          continue;
+        }
+      }
+    }
+
+    if (!captured_left) {
+      input->left_stick.captured_touch = -1;
+    }
+    if (!captured_right) {
+      input->right_stick.captured_touch = -1;
+    }
+
+  } else {
+
+    input->move_vec  = (Vector2){0.0f,0.0f};
+    if ( is_key_down(input->keyboard.left_key) ) {
+      input->move_vec.x -= 1.0f;
+    }
+    if ( is_key_down(input->keyboard.right_key) ) {
+      input->move_vec.x += 1.0f;
+    }
+    if ( is_key_down(input->keyboard.up_key) ) {
+      input->move_vec.y -= 1.0f;
+    }
+    if ( is_key_down(input->keyboard.down_key) ) {
+      input->move_vec.y += 1.0f;
+    }
+
+
+    input->shoot_vec  = (Vector2){0.0f,0.0f};
+    if ( is_key_down(input->keyboard.shoot_left_key) ) {
+      input->shoot_vec.x -= 1.0f;
+    }
+    if ( is_key_down(input->keyboard.shoot_right_key) ) {
+      input->shoot_vec.x += 1.0f;
+    }
+    if ( is_key_down(input->keyboard.shoot_up_key) ) {
+      input->shoot_vec.y -= 1.0f;
+    }
+    if ( is_key_down(input->keyboard.shoot_down_key) ) {
+      input->shoot_vec.y += 1.0f;
+    }
+
+
+
+    input->move_vec = vector2_normalize(input->move_vec);
+
+    if ( input->is_gamepad_enabled && is_gamepad_available(input->gamepad.id) ) {
+      if ( vector2_equals( input->move_vec, vector2_zero() ) ) {
+        input->move_vec.x = get_gamepad_axis_movement(input->gamepad.id, input->gamepad.move_axis_x);
+        input->move_vec.y = get_gamepad_axis_movement(input->gamepad.id, input->gamepad.move_axis_y);
+
+
+        input->action.is_pressed  = is_gamepad_button_pressed (input->gamepad.id, input->gamepad.action_btn);
+        input->action.is_down     = is_gamepad_button_down    (input->gamepad.id, input->gamepad.action_btn);
+        input->action.is_released = is_gamepad_button_released(input->gamepad.id, input->gamepad.action_btn);
+      }
+        input->shoot_vec.x = get_gamepad_axis_movement(input->gamepad.id, input->gamepad.shoot_axis_x);
+        input->shoot_vec.y = get_gamepad_axis_movement(input->gamepad.id, input->gamepad.shoot_axis_y);
+    }
+
+    if (input->is_mouse_enabled) {
+      if (input->pointer.is_down) {
+        input->shoot_vec = vector2_normalize( vector2_subtract(input->pointer.position, (Vector2){screen_x_/2,screen_y_/2}) );
+      }
+    }
+
+    input->move_vec    = input_fix_vec(input->move_vec, input->deadzone, 1.0f);
+    input->shoot_vec   = input_fix_vec(input->shoot_vec, input->deadzone, 1.0f);
+  }
+
   // TODO: add touch buttons
 }
+
+static void input_draw(Input input) {
+  if (input.is_touch_enabled) {
+    virtual_stick_draw(input.left_stick,  input.move_vec);
+    virtual_stick_draw(input.right_stick, input.shoot_vec);
+  }
+}
+
+static Vector2 input_fix_vec(Vector2 unfixed, float deadzone, float maximum) {
+  Vector2 normalized = vector2_normalize(unfixed);
+  Vector2 zero = vector2_zero();
+  float len = vector2_distance(unfixed, zero);
+  if (len > maximum) {
+    return vector2_scale( normalized, maximum);
+  }
+  if (len < deadzone) {
+    return zero;
+  }
+  return unfixed; // its fixed already
+
+}
+// :iVirtualStick
+void virtual_stick_draw(VirtualStick self, Vector2 control_vec) {
+  draw_circle_v(self.position, self.radius, fade(WHITE,0.1));
+  draw_circle_v(vector2_add( self.position, vector2_scale( control_vec, self.radius ) ), 40.0f, fade(WHITE,0.1));
+}
+
 // :iMusicPlayer
 static MusicPlayer music_player_init() {
   MusicPlayer self = {0};
@@ -541,6 +976,13 @@ static UI ui_init() {
   return ui;
 }
 
+
+// :iUnit
+void unit_update(Unit* self) {}
+void unit_draw(Unit self) {}
+void unit_char_draw_controlled_overlay( Unit self ) {
+}
+
 // :iButton
 static UIButton ui_button_new(int x, int y, int x_, int y_, const char* text) {
   UIButton self = {0};
@@ -566,19 +1008,27 @@ void button_draw(UIButton self) {
 }
 void button_update(UIButton* self) {
   if ( check_collision_point_rec(input.pointer.position, self->rec) ) {
-    if (self->is_down) {
-      self->is_released = input.pointer.is_released;
-    }
-    if (self->is_pressed || self->is_down) {
-      self->is_down = input.pointer.is_down;
-    }
     self->is_hovered = true;
+    if (self->was_pressed) {
+      self->is_released = input.pointer.is_released;
+      if (self->is_released) {
+        self->was_pressed = false;
+      }
+    } else {
+      self->is_released = false;
+    }
+    self->is_down = input.pointer.is_down;
     self->is_pressed = input.pointer.is_pressed;
+    if (self->is_pressed) {
+      self->was_pressed = true;
+    }
+    self->was_in_range = true;
   } else {
     self->is_hovered  = false;
     self->is_pressed  = false;
     self->is_down     = false;
     self->is_released = false;
+    self->was_in_range = false;
   }
 }
 // :iErrorBanner
